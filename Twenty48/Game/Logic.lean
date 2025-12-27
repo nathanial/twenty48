@@ -23,10 +23,7 @@ def spawnTile (state : GameState) : GameState :=
       grid := newGrid
       rng := rng2
       bestTile := newBestTile
-      anim := { state.anim with
-        newTilePos := some p
-        newTileTimer := 4
-      }
+      anim := { state.anim with newTilePos := some p }
     }
 
 /-- Check if the grid has a winning tile -/
@@ -45,8 +42,11 @@ def move (state : GameState) (dir : Direction) : GameState := Id.run do
   -- Don't process moves if game over (and not continuing)
   if state.gameOver then return state
 
-  -- Perform the slide
-  let (newGrid, scoreGained, merges, changed) := state.grid.slide dir
+  -- Don't process moves if animation is running
+  if state.anim.phase != .idle then return state
+
+  -- Perform the slide with movement tracking
+  let (newGrid, scoreGained, merges, movements, changed) := state.grid.slideWithMovement dir
 
   -- If nothing changed, return unchanged state
   if !changed then return state
@@ -65,8 +65,9 @@ def move (state : GameState) (dir : Direction) : GameState := Id.run do
   -- Check for win
   let justWon := !state.won && !state.continuedAfterWin && hasWinningTile newGrid
 
-  -- Create new state with animations
+  -- Create new state with slide animation (don't spawn tile yet)
   let mergePositions := merges.map (·.pos)
+  let mergeValues := merges.map (·.value)
   let newState : GameState :=
     { state with
       grid := newGrid
@@ -76,17 +77,18 @@ def move (state : GameState) (dir : Direction) : GameState := Id.run do
       previousGrid := prevGrid
       previousScore := prevScore
       won := state.won || justWon
-      anim := { state.anim with
-        merging := mergePositions
-        mergeTimer := 3
+      anim := {
+        phase := .sliding
+        timer := 4
+        slideDir := dir
+        tileMovements := movements
+        mergingCells := mergePositions
+        mergeValues := mergeValues
+        newTilePos := none
       }
     }
 
-  -- Spawn a new tile
-  let withNewTile := spawnTile newState
-
-  -- Check for game over
-  checkGameOver withNewTile
+  newState
 
 /-- Undo the last move -/
 def undo (state : GameState) : GameState :=
@@ -124,22 +126,58 @@ def initGame (seed : UInt64) : GameState :=
   let withFirst := spawnTile state
   spawnTile withFirst
 
+/-- Helper to update anim timer -/
+private def decrementTimer (state : GameState) : GameState :=
+  let anim := state.anim
+  let newAnim := { anim with timer := anim.timer - 1 }
+  { state with anim := newAnim }
+
+/-- Helper to set anim to default -/
+private def resetAnim (state : GameState) : GameState :=
+  { state with anim := AnimState.default }
+
 /-- Update animations (called each frame) -/
-def updateAnimations (state : GameState) : GameState := Id.run do
-  let mut anim := state.anim
+def updateAnimations (state : GameState) : GameState :=
+  match state.anim.phase with
+  | .idle => state
 
-  -- Decrement merge timer
-  if anim.mergeTimer > 0 then
-    anim := { anim with mergeTimer := anim.mergeTimer - 1 }
-    if anim.mergeTimer == 0 then
-      anim := { anim with merging := [] }
+  | .sliding =>
+    if state.anim.timer > 1 then
+      decrementTimer state
+    else if !state.anim.mergingCells.isEmpty then
+      -- Start merge animation
+      let anim := state.anim
+      let newAnim := { anim with phase := .merging, timer := 6 }
+      { state with anim := newAnim }
+    else
+      -- No merges, skip to spawn
+      let spawned := spawnTile state
+      let anim := spawned.anim
+      let newAnim := { anim with phase := .spawning, timer := 5 }
+      checkGameOver { spawned with anim := newAnim }
 
-  -- Decrement new tile timer
-  if anim.newTileTimer > 0 then
-    anim := { anim with newTileTimer := anim.newTileTimer - 1 }
-    if anim.newTileTimer == 0 then
-      anim := { anim with newTilePos := none }
+  | .merging =>
+    if state.anim.timer > 1 then
+      decrementTimer state
+    else
+      -- Merge complete, spawn new tile
+      let spawned := spawnTile state
+      let oldAnim := spawned.anim
+      let newAnim : AnimState := {
+        phase := .spawning
+        timer := 5
+        slideDir := oldAnim.slideDir
+        tileMovements := []
+        mergingCells := []
+        mergeValues := []
+        newTilePos := oldAnim.newTilePos
+      }
+      checkGameOver { spawned with anim := newAnim }
 
-  { state with anim := anim }
+  | .spawning =>
+    if state.anim.timer > 1 then
+      decrementTimer state
+    else
+      resetAnim state
 
 end Twenty48.Game

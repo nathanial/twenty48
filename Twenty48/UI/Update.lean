@@ -21,9 +21,13 @@ def update (state : GameState) (event : Option Event) : GameState × Bool := Id.
   | none => (newState, false)
 
   | some (.key k) =>
-    -- Quit always works
+    -- Quit always works (even during animation)
     if k.code == .char 'q' || k.code == .char 'Q' then
       return (newState, true)
+
+    -- Block all other input during animations
+    if newState.anim.phase != .idle then
+      return (newState, false)
 
     -- Restart always works
     if k.code == .char 'r' || k.code == .char 'R' then

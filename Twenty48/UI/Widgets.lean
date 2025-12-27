@@ -53,7 +53,48 @@ def formatTileValue (exp : Nat) : String :=
     let rightPad := String.ofList (List.replicate (4 - s.length - padding) ' ')
     leftPad ++ s ++ rightPad
 
-/-- Render a single tile at screen position -/
+/-- Get merge animation style based on timer -/
+def mergeStyle (normalBg : Color) (timer : Nat) : Color × Color :=
+  match timer with
+  | 6 | 5 => (.indexed 231, .black)    -- Bright white glow
+  | 4 | 3 => (.white, .black)          -- White flash
+  | _ => (normalBg, .default)          -- Settle to normal
+
+/-- Get spawn animation style based on timer -/
+def spawnStyleModifier (timer : Nat) : Style → Style
+  | style => match timer with
+    | 5 | 4 => style.withModifier { dim := true }     -- Dim start
+    | 3 => style.withBg (.indexed 231)                -- Flash bright
+    | _ => style                                       -- Normal
+
+/-- Render a single tile at screen position with style overrides -/
+def renderTileWithStyle (buf : Buffer) (screenX screenY : Nat) (tile : Tile)
+    (bgOverride : Option Color := none) (fgOverride : Option Color := none)
+    (styleModifier : Style → Style := id) : Buffer := Id.run do
+  let exp := tile.getD 0
+  let normalBg := tileBackground exp
+  let normalFg := tileForeground exp
+  let bg := bgOverride.getD normalBg
+  let fg := fgOverride.getD normalFg
+
+  let baseStyle := Style.default.withFg fg |>.withBg bg
+  let style := styleModifier baseStyle
+
+  let mut result := buf
+
+  -- Render 3 rows of the tile
+  let topRow := "██████"
+  let valueStr := formatTileValue exp
+  let midRow := "█" ++ valueStr ++ "█"
+  let botRow := "██████"
+
+  result := result.writeString screenX screenY topRow style
+  result := result.writeString screenX (screenY + 1) midRow style
+  result := result.writeString screenX (screenY + 2) botRow style
+
+  result
+
+/-- Render a single tile at screen position (simple version) -/
 def renderTile (buf : Buffer) (screenX screenY : Nat) (tile : Tile)
     (flash : Bool := false) (isNew : Bool := false) : Buffer := Id.run do
   let exp := tile.getD 0
@@ -83,7 +124,35 @@ def renderTile (buf : Buffer) (screenX screenY : Nat) (tile : Tile)
 
   result
 
-/-- Render the game grid -/
+/-- Interpolate screen position during slide animation -/
+def interpolatePosition (fromPos toPos : Point) (timer total : Nat)
+    (startX startY : Nat) : Nat × Nat :=
+  -- Timer counts down, so progress goes from 0 to 1
+  let progress := total - timer
+  let fromScreenX := startX + 1 + fromPos.x * tileCellWidth
+  let fromScreenY := startY + 1 + fromPos.y * tileCellHeight
+  let toScreenX := startX + 1 + toPos.x * tileCellWidth
+  let toScreenY := startY + 1 + toPos.y * tileCellHeight
+
+  if progress >= total then
+    (toScreenX, toScreenY)
+  else
+    -- Linear interpolation
+    let dx := if toScreenX >= fromScreenX
+              then (toScreenX - fromScreenX) * progress / total
+              else 0  -- Handle negative case separately
+    let dy := if toScreenY >= fromScreenY
+              then (toScreenY - fromScreenY) * progress / total
+              else 0
+    let negDx := if fromScreenX > toScreenX
+                 then (fromScreenX - toScreenX) * progress / total
+                 else 0
+    let negDy := if fromScreenY > toScreenY
+                 then (fromScreenY - toScreenY) * progress / total
+                 else 0
+    (fromScreenX + dx - negDx, fromScreenY + dy - negDy)
+
+/-- Render the game grid with animation support -/
 def renderGrid (buf : Buffer) (state : GameState) (startX startY : Nat) : Buffer := Id.run do
   let mut result := buf
 
@@ -109,23 +178,56 @@ def renderGrid (buf : Buffer) (state : GameState) (startX startY : Nat) : Buffer
     result := result.writeString startX (startY + dy) "│" borderStyle
     result := result.writeString (startX + gridWidth - 1) (startY + dy) "│" borderStyle
 
-  -- Draw tiles
-  for y in List.range gridSize do
-    for x in List.range gridSize do
-      let tile := state.grid.get x y
-      let tileX := startX + 1 + x * tileCellWidth
-      let tileY := startY + 1 + y * tileCellHeight
+  -- Render based on animation phase
+  match state.anim.phase with
+  | .sliding =>
+    -- Draw tiles at interpolated positions
+    for movement in state.anim.tileMovements do
+      let (screenX, screenY) := interpolatePosition
+        movement.fromPos movement.toPos state.anim.timer 4 startX startY
+      result := renderTile result screenX screenY movement.tile
 
-      -- Check if this tile is merging (flash effect)
-      let isMerging := state.anim.merging.any fun p => p.x == x && p.y == y
-      let flash := isMerging && state.anim.mergeTimer > 0
+  | .merging =>
+    -- Draw all tiles, with merge effect on merging cells
+    for y in List.range gridSize do
+      for x in List.range gridSize do
+        let tile := state.grid.get x y
+        let tileX := startX + 1 + x * tileCellWidth
+        let tileY := startY + 1 + y * tileCellHeight
 
-      -- Check if this is a new tile
-      let isNew := match state.anim.newTilePos with
-        | some p => p.x == x && p.y == y && state.anim.newTileTimer > 0
-        | none => false
+        let isMerging := state.anim.mergingCells.any fun p => p.x == x && p.y == y
+        if isMerging then
+          let (bg, fg) := mergeStyle (tileBackground (tile.getD 0)) state.anim.timer
+          result := renderTileWithStyle result tileX tileY tile (some bg) (some fg)
+        else
+          result := renderTile result tileX tileY tile
 
-      result := renderTile result tileX tileY tile flash isNew
+  | .spawning =>
+    -- Draw all tiles, with spawn effect on new tile
+    for y in List.range gridSize do
+      for x in List.range gridSize do
+        let tile := state.grid.get x y
+        let tileX := startX + 1 + x * tileCellWidth
+        let tileY := startY + 1 + y * tileCellHeight
+
+        let isSpawning := match state.anim.newTilePos with
+          | some p => p.x == x && p.y == y
+          | none => false
+
+        if isSpawning then
+          result := renderTileWithStyle result tileX tileY tile none none
+            (spawnStyleModifier state.anim.timer)
+        else
+          result := renderTile result tileX tileY tile
+
+  | .idle =>
+    -- Normal rendering, no animation effects
+    for y in List.range gridSize do
+      for x in List.range gridSize do
+        let tile := state.grid.get x y
+        let tileX := startX + 1 + x * tileCellWidth
+        let tileY := startY + 1 + y * tileCellHeight
+        result := renderTile result tileX tileY tile
 
   result
 

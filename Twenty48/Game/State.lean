@@ -10,22 +10,39 @@ namespace Twenty48.Game
 open Twenty48.Core
 open Terminus
 
+/-- Animation phase for sequencing effects -/
+inductive AnimPhase
+  | idle       -- No animation running
+  | sliding    -- Tiles moving to new positions
+  | merging    -- Merge glow/flash effect
+  | spawning   -- New tile pop-in effect
+  deriving Repr, BEq, Inhabited
+
 /-- Animation state for visual effects -/
 structure AnimState where
-  -- Merge animation
-  merging : List Point          -- Cells that just merged
-  mergeTimer : Nat              -- Frames remaining
+  phase : AnimPhase
+  timer : Nat                   -- Frames remaining in current phase
 
-  -- New tile animation
+  -- Slide animation data
+  slideDir : Core.Direction
+  tileMovements : List TileMovement  -- Origin → destination mappings
+
+  -- Merge animation data
+  mergingCells : List Point     -- Cells that merged
+  mergeValues : List Nat        -- Value after merge (for glow color)
+
+  -- Spawn animation data
   newTilePos : Option Point     -- Position of newly spawned tile
-  newTileTimer : Nat            -- Frames remaining
   deriving Repr
 
 def AnimState.default : AnimState :=
-  { merging := []
-  , mergeTimer := 0
+  { phase := .idle
+  , timer := 0
+  , slideDir := Core.Direction.up
+  , tileMovements := []
+  , mergingCells := []
+  , mergeValues := []
   , newTilePos := none
-  , newTileTimer := 0
   }
 
 instance : Inhabited AnimState where
