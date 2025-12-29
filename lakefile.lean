@@ -4,9 +4,8 @@ open Lake DSL
 package twenty48 where
   precompileModules := true
 
--- Local workspace dependencies
-require terminus from ".." / "terminus"
-require crucible from ".." / "crucible"
+require terminus from git "https://github.com/nathanial/terminus" @ "v0.0.1"
+require crucible from git "https://github.com/nathanial/crucible" @ "v0.0.1"
 
 @[default_target]
 lean_lib Twenty48 where
