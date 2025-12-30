@@ -1,10 +1,8 @@
 # Lake build artifacts
-.lake/
 lake-packages/
 build/
 
 # Lake manifest (generated)
-lake-manifest.json
 
 # Editor files
 .vscode/
@@ -22,3 +20,5 @@ Thumbs.db
 *.ilean
 *.trace
 *.hash
+.lake
+lake-manifest.json
