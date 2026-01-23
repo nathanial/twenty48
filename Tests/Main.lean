@@ -150,8 +150,6 @@ test "Tile value calculation" := do
   tileValue (some 10) ≡ 1024
   tileValue (some 11) ≡ 2048
 
-#generate_tests
-
 end Twenty48.Tests
 
 def main : IO UInt32 := do
